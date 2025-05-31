@@ -6,7 +6,7 @@ Group Name: **Solo Vibe Coder**
 
 Participant Name: **Yinjian Chen**
 
--------------------------------------------
+--------------------------------------------
 
 AWS Code: XXXXXXXXXXX
 
