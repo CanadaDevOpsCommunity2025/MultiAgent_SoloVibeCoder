@@ -8,6 +8,10 @@ Participant Name: **Yinjian Chen**
 
 -------------------------------------------
 
-AWS Code : PC56K9E18QC14E
+AWS Code: XXXXXXXXXXX
+
+
+For Credit details please Contact administrator on Slack
+https://app.slack.com/huddle/T01BN24U54L/C08SF5BUGN4
 
 
