@@ -35,5 +35,4 @@ Last month I started my solo development journey; with my pure developer backgro
 http://ai-agents-alb-production-1974946315.us-east-1.elb.amazonaws.com/
 
 ## H. Video Demo
-https://drive.google.com/file/d/131XaAsIXCi0P6c6Fqz-xuBLaKBA0YEP1/view?usp=share_link
-
+https://drive.google.com/file/d/1JTwadDF9jJOOVDyWV_yiWW6N_W1pj0Mb/view?usp=share_link
