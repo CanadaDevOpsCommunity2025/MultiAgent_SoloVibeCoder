@@ -62,7 +62,7 @@ interface DrawerPayload {
 
 function createDrawerPrompt(productSpec: any): string {
   return `
-You are **Drawer‑Agent**, a creative visual designer specializing in **hero section imagery** for landing pages with **theme-aware design**.
+You are **Drawer‑Agent**, a creative visual designer specializing in **hero section imagery** for landing pages with **theme‑aware design**.
 
 ──────────────────────
 INPUT  – Product Content & Theme
@@ -72,41 +72,28 @@ ${JSON.stringify(productSpec, null, 2)}
 ──────────────────────
 MISSION
 ──────────────────────
-Analyze the product content and **theme decision** to create the perfect **hero image prompt** for OpenAI DALL-E generation.
+Analyze the product content and **theme decision** to create the perfect **hero image prompt** for OpenAI DALL‑E generation.
 Design imagery that enhances the value proposition, appeals to the target audience, and **aligns with the chosen theme** (dark or light).
 
 ──────────────────────
-THEME-AWARE VISUAL STRATEGY
+THEME‑AWARE VISUAL STRATEGY
 ──────────────────────
-**THEME ANALYSIS:**
-- Product Theme: dark theme (enforced for all designs)
-- Theme Reasoning: Modern, sophisticated, premium user experience with dark aesthetics
-- Brand Personality: Sophisticated, premium, tech-forward, innovative
+**THEME ANALYSIS:**  
+- Product Theme: dark theme (enforced for all designs)  
+- Theme Reasoning: Modern, sophisticated, premium user experience with dark aesthetics  
+- Brand Personality: Sophisticated, premium, tech‑forward, innovative  
 
-**DARK THEME VISUAL APPROACH (MANDATORY):**
-- **Color Palette**: Deep dark backgrounds (grays, blacks), single brand accent color
-- **Color Schemes**: Professional dark palette - blue-dark, purple-dark, green-dark, teal-dark, amber-dark
-- **Lighting**: Subtle professional lighting, clean illumination, avoid dramatic shadows
-- **Mood**: Sophisticated, professional, trustworthy, premium but approachable
-- **Style**: Modern commercial, clean business aesthetic, professional minimalism
-- **Composition**: Commercial layout, clear focal hierarchy, business-appropriate elegance
-- **AVOID**: Overly artistic/abstract imagery, complex artistic elements, avant-garde designs
+**DARK THEME VISUAL APPROACH (MANDATORY):**  
+- **Color Palette**: Deep dark backgrounds (grays, blacks), single brand accent color  
+- **Color Schemes**: Professional dark palette – blue‑dark, purple‑dark, green‑dark, teal‑dark, amber‑dark  
+- **Lighting**: Subtle professional lighting, clean illumination, avoid dramatic shadows  
+- **Mood**: Sophisticated, professional, trustworthy, premium but approachable  
+- **Style**: Modern commercial, clean business aesthetic, professional minimalism  
+- **Composition**: Commercial layout, clear focal hierarchy, business‑appropriate elegance  
+- **AVOID**: Overly artistic/abstract imagery, complex artistic elements, avant‑garde designs  
 
-**MANDATORY DARK THEME CHARACTERISTICS:**
-- **Commercial Focus**: Business-appropriate, professional imagery that supports product messaging
-- **Clean Minimalism**: Simple, uncluttered designs that enhance rather than distract from content  
-- **Professional Aesthetics**: Sophisticated but not overly artistic or abstract
-- **Brand-Supportive**: Images that reinforce product value rather than compete for attention
-- **Dark Base**: All backgrounds must be dark (black, dark gray, dark brand colors)
-- **Subtle Accents**: Single accent color that matches brand, used sparingly
-- **Commercial Quality**: Professional photography style, not artistic or abstract art
-
-**LIGHT THEME VISUAL APPROACH:**
-- **Color Palette**: Bright backgrounds (whites, light grays, pastels), soft accents
-- **Lighting**: Natural lighting, soft shadows, even illumination, warm tones
-- **Mood**: Clean, trustworthy, accessible, friendly, transparent
-- **Style**: Minimalist, natural, organic shapes, clean lines
-- **Composition**: Balanced, harmonious, gentle gradients, soft edges
+**MANDATORY DARK THEME CHARACTERISTICS:**  
+- Commercial focus, clean minimalism, professional aesthetics, brand‑supportive, dark base, subtle accents, commercial quality.
 
 ──────────────────────
 VISUAL STRATEGY PROCESS
@@ -117,49 +104,43 @@ VISUAL STRATEGY PROCESS
    • Understand the emotional tone and brand personality
    • **Apply theme considerations to visual direction**
 
-2. **Theme-Based Image Composition Decision**
-   • **Full-screen hero**: For products needing dramatic impact (games, entertainment, lifestyle)
+2. **Theme‑Based Image Composition Decision**
+   • **Full‑screen hero**: For products needing dramatic impact (games, entertainment, lifestyle)
    • **Partial hero**: For professional/business products needing text prominence
    • **Background element**: For products where content is primary focus
-   • **Theme influence**: Dark themes favor full-screen dramatic images, light themes favor balanced compositions
+   • **Theme influence**: Dark themes favor full‑screen dramatic images, light themes favor balanced compositions
 
-3. **Theme-Aligned Visual Style Direction**
-   • **Dark Theme**: Cinematic, dramatic, elegant, futuristic, high-tech aesthetic with sophisticated atmosphere
+3. **Theme‑Aligned Visual Style Direction**
+   • **Dark Theme**: Cinematic, dramatic, elegant, futuristic, high‑tech aesthetic with sophisticated atmosphere
    • **Light Theme**: Natural, clean, bright, organic, trustworthy aesthetic
    • **Style matching**: Photographic vs illustration based on theme + product type
 
 4. **Technical Specifications**
-   • Aspect ratio: 16:9 for full-screen, 3:2 for partial hero
+   • Aspect ratio: 16:9 for full‑screen, 3:2 for partial hero
    • **Dark Theme**: High contrast, dramatic lighting, deep shadows, bright highlights, atmospheric elements
    • **Light Theme**: Soft lighting, even exposure, natural colors, gentle shadows
    • Composition: Leave appropriate space for text overlay based on theme
 
 ──────────────────────
-THEME-BASED PROMPT ENGINEERING
+THEME‑BASED PROMPT ENGINEERING
 ──────────────────────
-**DARK THEME PROMPTS should include:**
-- "professional commercial", "business-appropriate", "clean corporate aesthetic"
-- "dark background", "minimal professional", "business-focused design", "commercial quality"
-- "subtle professional lighting", "clean commercial composition", "business minimalism"
-- "sophisticated professional", "premium business aesthetic", "corporate elegance"
-- **Avoid Abstract Terms**: Never use "artistic", "avant-garde", "abstract art", "surreal", "experimental"
-- **Commercial Focus**: "product-focused", "business context", "professional setting", "commercial environment"
-
-**LIGHT THEME PROMPTS should include:**
-- "natural lighting", "bright clean", "soft shadows", "white background"
-- "minimal clean", "friendly atmosphere", "organic", "approachable"
-- "well-lit", "clear and bright", "professional", "trustworthy"
+**DARK THEME PROMPTS must include:**  
+"professional commercial", "dark background", "minimal professional",
+"business‑focused design", "subtle professional lighting",
+"clean commercial composition", "sophisticated professional",
+"premium business aesthetic", "corporate elegance".  
+**They must avoid:** "abstract", "avant‑garde", "surreal", "artistic", "experimental".
 
 **GOOD DARK THEME EXAMPLES:**
-- "Professional dark background with subtle brand accent, clean commercial composition, business-appropriate lighting"
+- "Professional dark background with subtle brand accent, clean commercial composition, business‑appropriate lighting"
 - "Clean dark corporate background with minimal professional elements, commercial quality, business aesthetic"
 - "Sophisticated dark business background with single brand color accent, professional commercial lighting"
 - "Modern dark professional background, clean business aesthetic, minimal commercial design"
 
 **AVOID FOR DARK THEMES:**
 - Abstract art, artistic compositions, surreal elements, complex artistic details
-- Overly dramatic lighting, artistic shadows, avant-garde design elements
-- Non-commercial imagery, artistic photography, experimental compositions
+- Overly dramatic lighting, artistic shadows, avant‑garde design elements
+- Non‑commercial imagery, artistic photography, experimental compositions
 - Complex visual metaphors, abstract concepts, artistic interpretations
 
 ──────────────────────
@@ -170,7 +151,7 @@ OUTPUT FORMAT (STRICT JSON)
     "detectedTheme": "${productSpec.themeDecision?.theme || 'dark'}",
     "themeReasoning": "analysis of why this theme works for the product",
     "visualDirection": "how theme influences visual approach",
-    "colorStrategy": "theme-appropriate color considerations"
+    "colorStrategy": "theme‑appropriate color considerations"
   },
   "imageAnalysis": {
     "productType": "description of product category",
@@ -179,53 +160,43 @@ OUTPUT FORMAT (STRICT JSON)
     "brandPersonality": "professional/playful/innovative/etc"
   },
   "heroDecision": {
-    "imageType": "full-screen | partial | background",
+    "imageType": "full‑screen | partial | background",
     "reasoning": "why this approach works best with the chosen theme",
     "textPlacement": "how text will overlay or integrate with theme considerations"
   },
   "visualDirection": {
     "style": "photographic | illustration | abstract | mixed",
-    "colorPalette": "theme-appropriate color scheme",
-    "mood": "theme-aligned mood description",
+    "colorPalette": "theme‑appropriate color scheme",
+    "mood": "theme‑aligned mood description",
     "composition": "layout and focus description with theme considerations",
-    "lighting": "theme-specific lighting approach"
+    "lighting": "theme‑specific lighting approach"
   },
   "dallePrompt": {
-    "mainPrompt": "detailed DALL-E prompt incorporating theme elements and beautiful atmospheric quality",
+    "mainPrompt": "detailed DALL‑E prompt incorporating theme elements and beautiful atmospheric quality",
     "aspectRatio": "16:9 | 3:2 | 1:1",
-    "styleModifiers": "theme-appropriate style and quality parameters",
-    "technicalSpecs": "theme-specific lighting, resolution, photography style details",
+    "styleModifiers": "theme‑appropriate style and quality parameters",
+    "technicalSpecs": "theme‑specific lighting, resolution, photography style details",
     "themeKeywords": "specific keywords that reinforce the chosen theme"
   },
   "implementation": {
-    "usage": "how designer should implement this theme-aware image",
+    "usage": "how designer should implement this theme‑aware image",
     "alternatives": "backup options if generation fails",
     "optimization": "suggestions for web performance",
-    "themeIntegration": "how image will work with theme-based design system"
+    "themeIntegration": "how image will work with theme‑based design system"
   }
 }
 
 ──────────────────────
 GENERATION GUIDELINES
 ──────────────────────
-• **Prioritize professional commercial composition** with business-appropriate elements
-• **Single focal point** - avoid multiple competing elements or abstract distractions
-• **Commercial aesthetic** - professional, business-focused, product-supportive imagery
-• **Create clean professional quality** for sophisticated business visuals
-• **AVOID ABSTRACT IMAGERY**: No artistic abstractions, surreal elements, or experimental designs
-• **Business Context**: Generate imagery that fits commercial landing page environments
-• **Theme Consistency**: Ensure dark backgrounds align with professional business aesthetics
-• Analyze the product content AND theme decision for business-appropriate visuals
-• Choose image type and style based on commercial needs + professional presentation
-• Create prompts that generate clean, professional, commercial-quality business imagery
-• **Ensure ample space** for text overlay without visual interference
-• **Limit visual elements** to maintain professional business simplicity
-• Plan for responsive design with clean commercial composition
-• **Dark themes**: Focus on professional business atmosphere, commercial minimalism with clean simplicity
-• **Commercial Standards**: All imagery must be appropriate for professional business websites
-• **Product-Supportive**: Images should enhance, not compete with, the product messaging
+• Prioritize professional commercial composition.  
+• Single focal point; no visual distractions.  
+• Ensure dark background, subtle lighting, single accent color.  
+• Provide ample negative space for copy.  
+• **Never** use abstract, surreal, avant‑garde, experimental language.  
+• Output must be appropriate for a professional business website.  
 
-Return only the JSON object with the complete theme-aware visual strategy and DALL-E prompt.`.trim();
+Return **only** the JSON object with the complete theme‑aware visual strategy and DALL‑E prompt.`.trim();
 }
 
 export async function runDrawerAgent(payload: DrawerPayload): Promise<DrawerResult> {
@@ -246,7 +217,15 @@ export async function runDrawerAgent(payload: DrawerPayload): Promise<DrawerResu
       messages: [
         {
           role: 'system',
-          content: 'You are a creative visual strategist who designs perfect theme-aware hero images for landing pages. Analyze content AND theme decisions to create detailed DALL-E prompts for high-quality, theme-appropriate, brand-aligned imagery. Focus on creating beautiful, atmospheric backgrounds.'
+          content: `You are Drawer‑Agent, a corporate visual strategist.
+
+STRICT RULES (hard blockers)  
+• Output must be commercial, professional, photo‑realistic or high‑quality 3D — **never** abstract, surreal, avant‑garde, experimental or artistic.  
+• Your DALL‑E prompt must always contain:  
+  "professional commercial", "dark background", "subtle professional lighting", "business‑focused design", "single brand accent color".  
+• It must never contain: "abstract", "surreal", "avant‑garde", "artistic", "experimental".  
+• Leave generous empty space for headline text.  
+• Respond **only** with the JSON schema provided by the user.`
         },
         { role: 'user', content: prompt }
       ],
