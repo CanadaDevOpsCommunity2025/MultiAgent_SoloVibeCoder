@@ -120,6 +120,10 @@ services:
     environment:
       # OpenAI configuration
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY_2=${OPENAI_API_KEY_2}
+      - OPENAI_API_KEY_3=${OPENAI_API_KEY_3}
+      - OPENAI_API_KEY_4=${OPENAI_API_KEY_4}
+      - OPENAI_API_KEY_5=${OPENAI_API_KEY_5}
       - OPENAI_MODEL=${OPENAI_MODEL}
       
       # AWS configuration (LocalStack)
@@ -163,6 +167,10 @@ services:
     environment:
       # OpenAI configuration
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY_2=${OPENAI_API_KEY_2}
+      - OPENAI_API_KEY_3=${OPENAI_API_KEY_3}
+      - OPENAI_API_KEY_4=${OPENAI_API_KEY_4}
+      - OPENAI_API_KEY_5=${OPENAI_API_KEY_5}
       - OPENAI_MODEL=${OPENAI_MODEL}
       
       # AWS configuration (LocalStack)
@@ -204,6 +212,10 @@ services:
     environment:
       # OpenAI configuration
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY_2=${OPENAI_API_KEY_2}
+      - OPENAI_API_KEY_3=${OPENAI_API_KEY_3}
+      - OPENAI_API_KEY_4=${OPENAI_API_KEY_4}
+      - OPENAI_API_KEY_5=${OPENAI_API_KEY_5}
       - OPENAI_MODEL=${OPENAI_MODEL}
       
       # AWS configuration (LocalStack)
@@ -246,6 +258,10 @@ services:
     environment:
       # OpenAI configuration
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY_2=${OPENAI_API_KEY_2}
+      - OPENAI_API_KEY_3=${OPENAI_API_KEY_3}
+      - OPENAI_API_KEY_4=${OPENAI_API_KEY_4}
+      - OPENAI_API_KEY_5=${OPENAI_API_KEY_5}
       - OPENAI_MODEL=${OPENAI_MODEL}
       
       # AWS configuration (LocalStack)
@@ -287,6 +303,10 @@ services:
     environment:
       # OpenAI configuration
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY_2=${OPENAI_API_KEY_2}
+      - OPENAI_API_KEY_3=${OPENAI_API_KEY_3}
+      - OPENAI_API_KEY_4=${OPENAI_API_KEY_4}
+      - OPENAI_API_KEY_5=${OPENAI_API_KEY_5}
       - OPENAI_MODEL=${OPENAI_MODEL}
       
       # AWS configuration (LocalStack)

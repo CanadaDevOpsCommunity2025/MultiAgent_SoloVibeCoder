@@ -13,6 +13,26 @@ Parameters:
     NoEcho: true
     Description: OpenAI API Key for AI agents
 
+  OpenAIApiKey2:
+    Type: String
+    NoEcho: true
+    Description: OpenAI API Key 2 for AI agents
+
+  OpenAIApiKey3:
+    Type: String
+    NoEcho: true
+    Description: OpenAI API Key 3 for AI agents
+
+  OpenAIApiKey4:
+    Type: String
+    NoEcho: true
+    Description: OpenAI API Key 4 for AI agents
+
+  OpenAIApiKey5:
+    Type: String
+    NoEcho: true
+    Description: OpenAI API Key 5 for AI agents
+
   VpcCidr:
     Type: String
     Default: 10.0.0.0/16
@@ -411,7 +431,11 @@ Resources:
       Description: 'OpenAI API Key for AI Agents'
       SecretString: !Sub |
         {
-          "openai_api_key": "${OpenAIApiKey}"
+          "openai_api_key": "${OpenAIApiKey}",
+          "openai_api_key_2": "${OpenAIApiKey2}",
+          "openai_api_key_3": "${OpenAIApiKey3}",
+          "openai_api_key_4": "${OpenAIApiKey4}",
+          "openai_api_key_5": "${OpenAIApiKey5}"
         }
       Tags:
         - Key: Environment

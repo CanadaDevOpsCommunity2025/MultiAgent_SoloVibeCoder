@@ -194,6 +194,10 @@ jobs:
           --parameter-overrides \
             Environment=$ENV_NAME \
             OpenAIApiKey=${{ secrets.OPENAI_API_KEY }} \
+            OpenAIApiKey2=${{ secrets.OPENAI_API_KEY_2 }} \
+            OpenAIApiKey3=${{ secrets.OPENAI_API_KEY_3 }} \
+            OpenAIApiKey4=${{ secrets.OPENAI_API_KEY_4 }} \
+            OpenAIApiKey5=${{ secrets.OPENAI_API_KEY_5 }} \
           --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
           --no-fail-on-empty-changeset; then
           
@@ -480,6 +484,22 @@ jobs:
                 {
                   "name": "OPENAI_API_KEY",
                   "valueFrom": "${SECRET_ARN}:openai_api_key::"
+                },
+                {
+                  "name": "OPENAI_API_KEY_2",
+                  "valueFrom": "${SECRET_ARN}:openai_api_key_2::"
+                },
+                {
+                  "name": "OPENAI_API_KEY_3",
+                  "valueFrom": "${SECRET_ARN}:openai_api_key_3::"
+                },
+                {
+                  "name": "OPENAI_API_KEY_4",
+                  "valueFrom": "${SECRET_ARN}:openai_api_key_4::"
+                },
+                {
+                  "name": "OPENAI_API_KEY_5",
+                  "valueFrom": "${SECRET_ARN}:openai_api_key_5::"
                 }
               ],
               "logConfiguration": {

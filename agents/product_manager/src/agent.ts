@@ -4,7 +4,7 @@ import { createS3Helper, S3Helper } from './aws';
 
 // Initialize OpenAI client
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY_2 || process.env.OPENAI_API_KEY,
 });
 
 export interface ResearchResult {
