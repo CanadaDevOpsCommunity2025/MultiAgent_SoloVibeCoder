@@ -1,0 +1,1140 @@
+name: Multi-Agent AWS ECS
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build all packages
+      run: npm run build
+
+    - name: Run tests
+      run: npm test || echo "No tests configured yet"
+
+  build-and-push-images:
+    name: Build and Push Docker Images
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    
+    strategy:
+      matrix:
+        service: [task-router, researcher, product_manager, drawer, designer, coder, agent-web]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Verify Dockerfile existence
+      run: |
+        if [ "${{ matrix.service }}" = "agent-web" ]; then
+          DOCKERFILE_PATH="./agent-web/Dockerfile"
+        elif [ "${{ matrix.service }}" = "task-router" ]; then
+          DOCKERFILE_PATH="./task-router/Dockerfile"
+        else
+          DOCKERFILE_PATH="./agents/${{ matrix.service }}/Dockerfile"
+        fi
+        
+        echo "Checking for Dockerfile at: $DOCKERFILE_PATH"
+        if [ ! -f "$DOCKERFILE_PATH" ]; then
+          echo "❌ Dockerfile not found at $DOCKERFILE_PATH"
+          exit 1
+        else
+          echo "✅ Dockerfile found at $DOCKERFILE_PATH"
+          echo "Dockerfile contents (first 10 lines):"
+          head -10 "$DOCKERFILE_PATH"
+        fi
+
+    - name: Build, tag, and push image to Amazon ECR
+      env:
+        ECR_REPOSITORY: ai-agents-${{ matrix.service }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        # Create ECR repository if it doesn't exist
+        aws ecr describe-repositories --repository-names $ECR_REPOSITORY || \
+        aws ecr create-repository --repository-name $ECR_REPOSITORY
+
+        # Build from workspace root with correct Dockerfile path
+        if [ "${{ matrix.service }}" = "task-router" ]; then
+          echo "Building task-router from workspace root using its Dockerfile"
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -f ./task-router/Dockerfile .
+        elif [ "${{ matrix.service }}" = "agent-web" ]; then
+          echo "Building agent-web from its own directory"
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -f ./agent-web/Dockerfile ./agent-web
+        else
+          echo "Building agent ${{ matrix.service }} from workspace root using its Dockerfile"
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -f ./agents/${{ matrix.service }}/Dockerfile .
+        fi
+
+        # Tag and push images
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+  deploy-infrastructure:
+    name: Deploy AWS Infrastructure
+    needs: [build, build-and-push-images]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Determine environment
+      id: env
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+        elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          echo "environment=production" >> $GITHUB_OUTPUT
+        else
+          echo "environment=staging" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Validate CloudFormation Template
+      run: |
+        echo "🔍 Validating CloudFormation template..."
+        aws cloudformation validate-template \
+          --template-body file://./infra/cloudformation/ecs-infrastructure.yml
+        echo "✅ Template validation passed"
+
+    - name: Pre-deployment Cleanup
+      run: |
+        echo "🧹 Running pre-deployment cleanup..."
+        chmod +x ./infra/cleanup-conflicting-resources.sh
+        ./infra/cleanup-conflicting-resources.sh "${{ steps.env.outputs.environment }}"
+
+    - name: Deploy CloudFormation Infrastructure
+      run: |
+        ENV_NAME=${{ steps.env.outputs.environment }}
+        STACK_NAME="ai-agents-ecs-infrastructure-${ENV_NAME}"
+        
+        echo "🚀 Deploying infrastructure stack: $STACK_NAME"
+        echo "Environment: $ENV_NAME"
+        echo "Region: ${{ env.AWS_REGION }}"
+        
+        # Check if stack exists and is in ROLLBACK_COMPLETE state
+        STACK_STATUS=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+        
+        if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
+          echo "⚠️  Stack is in ROLLBACK_COMPLETE state. Deleting it first..."
+          aws cloudformation delete-stack --stack-name $STACK_NAME
+          echo "⏳ Waiting for stack deletion to complete..."
+          aws cloudformation wait stack-delete-complete --stack-name $STACK_NAME
+          echo "✅ Stack deleted successfully"
+        elif [ "$STACK_STATUS" = "DELETE_FAILED" ] || [ "$STACK_STATUS" = "CREATE_FAILED" ]; then
+          echo "⚠️  Stack is in failed state: $STACK_STATUS. Deleting it first..."
+          aws cloudformation delete-stack --stack-name $STACK_NAME
+          echo "⏳ Waiting for stack deletion to complete..."
+          aws cloudformation wait stack-delete-complete --stack-name $STACK_NAME
+          echo "✅ Stack deleted successfully"
+        elif [ "$STACK_STATUS" != "DOES_NOT_EXIST" ]; then
+          echo "📊 Current stack status: $STACK_STATUS"
+        fi
+        
+        # Deploy ECS infrastructure stack
+        if aws cloudformation deploy \
+          --template-file ./infra/cloudformation/ecs-infrastructure.yml \
+          --stack-name $STACK_NAME \
+          --parameter-overrides \
+            Environment=$ENV_NAME \
+            OpenAIApiKey=${{ secrets.OPENAI_API_KEY }} \
+            OpenAIApiKey2=${{ secrets.OPENAI_API_KEY_2 }} \
+            OpenAIApiKey3=${{ secrets.OPENAI_API_KEY_3 }} \
+            OpenAIApiKey4=${{ secrets.OPENAI_API_KEY_4 }} \
+            OpenAIApiKey5=${{ secrets.OPENAI_API_KEY_5 }} \
+          --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+          --no-fail-on-empty-changeset; then
+          
+          echo "✅ Infrastructure deployment successful"
+          
+        else
+          echo "❌ Infrastructure deployment failed"
+          echo "📋 Fetching stack events for debugging..."
+          
+          # Get the failed events
+          aws cloudformation describe-stack-events \
+            --stack-name $STACK_NAME \
+            --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`UPDATE_FAILED`].[Timestamp,ResourceType,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+            --output table || echo "Could not fetch stack events"
+          
+          # Get overall stack status
+          aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query 'Stacks[0].[StackStatus,StackStatusReason]' \
+            --output table || echo "Could not fetch stack status"
+          
+          exit 1
+        fi
+
+  deploy-with-docker-compose:
+    name: Deploy Applications to ECS
+    needs: [deploy-infrastructure]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Determine environment
+      id: env
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+        elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          echo "environment=production" >> $GITHUB_OUTPUT
+        else
+          echo "environment=staging" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Verify Docker and Compose
+      run: |
+        # GitHub Actions runners already include Docker Compose v2 with ECS support
+        docker --version
+        docker compose version
+        
+        # Also check AWS CLI
+        aws --version
+
+    - name: Get infrastructure outputs
+      id: infra
+      run: |
+        ENV_NAME=${{ steps.env.outputs.environment }}
+        STACK_NAME="ai-agents-ecs-infrastructure-${ENV_NAME}"
+        
+        echo "🔍 Getting infrastructure outputs from stack: $STACK_NAME"
+        echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        
+        # First check if stack exists and is in good state
+        STACK_STATUS=$(aws cloudformation describe-stacks \
+          --stack-name $STACK_NAME \
+          --query 'Stacks[0].StackStatus' \
+          --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+        
+        echo "Stack Status: $STACK_STATUS"
+        
+        if [[ "$STACK_STATUS" != "CREATE_COMPLETE" && "$STACK_STATUS" != "UPDATE_COMPLETE" ]]; then
+          echo "❌ Stack is not in a deployable state: $STACK_STATUS"
+          echo "🔍 Stack Events (last 5):"
+          aws cloudformation describe-stack-events \
+            --stack-name $STACK_NAME \
+            --max-items 5 \
+            --query 'StackEvents[*].[Timestamp,ResourceType,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+            --output table || echo "Cannot get stack events"
+          exit 1
+        fi
+        
+        echo "✅ Stack is in good state, getting outputs..."
+        
+        # Get VPC ID
+        VPC_ID=$(aws cloudformation describe-stacks \
+          --stack-name $STACK_NAME \
+          --query 'Stacks[0].Outputs[?OutputKey==`VpcId`].OutputValue' \
+          --output text)
+        echo "VPC ID: $VPC_ID"
+        
+        # Get ECS Cluster Name
+        ECS_CLUSTER=$(aws cloudformation describe-stacks \
+          --stack-name $STACK_NAME \
+          --query 'Stacks[0].Outputs[?OutputKey==`ECSClusterName`].OutputValue' \
+          --output text)
+        echo "ECS Cluster: $ECS_CLUSTER"
+        
+        # Get Load Balancer DNS
+        ALB_DNS=$(aws cloudformation describe-stacks \
+          --stack-name $STACK_NAME \
+          --query 'Stacks[0].Outputs[?OutputKey==`LoadBalancerDNS`].OutputValue' \
+          --output text)
+        echo "ALB DNS: $ALB_DNS"
+        
+        # Get Private Subnets
+        PRIVATE_SUBNETS=$(aws cloudformation describe-stacks \
+          --stack-name $STACK_NAME \
+          --query 'Stacks[0].Outputs[?OutputKey==`PrivateSubnets`].OutputValue' \
+          --output text)
+        echo "Private Subnets: $PRIVATE_SUBNETS"
+        
+        # Get ECS Security Group
+        ECS_SECURITY_GROUP=$(aws cloudformation describe-stacks \
+          --stack-name $STACK_NAME \
+          --query 'Stacks[0].Outputs[?OutputKey==`ECSSecurityGroupId`].OutputValue' \
+          --output text)
+        echo "ECS Security Group: $ECS_SECURITY_GROUP"
+        
+        # Get Task Execution Role
+        TASK_EXECUTION_ROLE=$(aws cloudformation describe-stacks \
+          --stack-name $STACK_NAME \
+          --query 'Stacks[0].Outputs[?OutputKey==`ECSTaskExecutionRoleArn`].OutputValue' \
+          --output text)
+        echo "Task Execution Role: $TASK_EXECUTION_ROLE"
+        
+        # Get Task Role
+        TASK_ROLE=$(aws cloudformation describe-stacks \
+          --stack-name $STACK_NAME \
+          --query 'Stacks[0].Outputs[?OutputKey==`ECSTaskRoleArn`].OutputValue' \
+          --output text)
+        echo "Task Role: $TASK_ROLE"
+
+        # Validate all required outputs are present
+        if [[ -z "$VPC_ID" || -z "$ECS_CLUSTER" || -z "$PRIVATE_SUBNETS" || -z "$ECS_SECURITY_GROUP" || -z "$TASK_EXECUTION_ROLE" || -z "$TASK_ROLE" ]]; then
+          echo "❌ Missing required infrastructure outputs!"
+          echo "🔍 All Stack Outputs:"
+          aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query 'Stacks[0].Outputs[*].{Key:OutputKey,Value:OutputValue}' \
+            --output table
+          exit 1
+        fi
+
+        echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
+        echo "ecs_cluster=$ECS_CLUSTER" >> $GITHUB_OUTPUT
+        echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
+        echo "private_subnets=$PRIVATE_SUBNETS" >> $GITHUB_OUTPUT
+        echo "ecs_security_group=$ECS_SECURITY_GROUP" >> $GITHUB_OUTPUT
+        echo "task_execution_role=$TASK_EXECUTION_ROLE" >> $GITHUB_OUTPUT
+        echo "task_role=$TASK_ROLE" >> $GITHUB_OUTPUT
+
+    - name: Fix ECS Cluster Issues
+      env:
+        ENVIRONMENT: ${{ steps.env.outputs.environment }}
+        ECS_CLUSTER: ${{ steps.infra.outputs.ecs_cluster }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      run: |
+        echo "🔧 Running ECS Cluster Fix Script"
+        echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        echo "Environment: $ENVIRONMENT"
+        echo "Expected Cluster: $ECS_CLUSTER"
+        echo ""
+        
+        # First check if cluster exists and its status
+        CLUSTER_STATUS=$(aws ecs describe-clusters \
+          --clusters "$ECS_CLUSTER" \
+          --query 'clusters[0].status' \
+          --output text 2>/dev/null || echo "NOT_FOUND")
+        
+        echo "Current cluster status: $CLUSTER_STATUS"
+        
+        # Make the scripts executable
+        chmod +x ./infra/fix-cluster-for-github-actions.sh
+        chmod +x ./infra/fix-inactive-cluster.sh
+        
+        # Use the appropriate fix script based on cluster status
+        if [[ "$CLUSTER_STATUS" == "INACTIVE" ]]; then
+          echo "🎯 Cluster is INACTIVE - using specialized fix script"
+          ./infra/fix-inactive-cluster.sh "$ENVIRONMENT"
+        elif [[ "$CLUSTER_STATUS" == "NOT_FOUND" ]]; then
+          echo "🔍 Cluster not found - using general fix script"
+          ./infra/fix-cluster-for-github-actions.sh "$ENVIRONMENT"
+        elif [[ "$CLUSTER_STATUS" == "ACTIVE" ]]; then
+          echo "✅ Cluster is already ACTIVE - no fix needed"
+        else
+          echo "⚠️  Unexpected cluster status: $CLUSTER_STATUS - using general fix script"
+          ./infra/fix-cluster-for-github-actions.sh "$ENVIRONMENT"
+        fi
+
+    - name: Generate ECS Task Definitions
+      env:
+        ENVIRONMENT: ${{ steps.env.outputs.environment }}
+        AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        IMAGE_TAG: ${{ github.sha }}
+        TASK_EXECUTION_ROLE: ${{ steps.infra.outputs.task_execution_role }}
+        TASK_ROLE: ${{ steps.infra.outputs.task_role }}
+        ALB_DNS: ${{ steps.infra.outputs.alb_dns }}
+      run: |
+        # Create task definitions for each service
+        mkdir -p ecs-task-definitions
+        
+        # Get the Secrets Manager ARN for the OpenAI API key
+        SECRET_ARN=$(aws secretsmanager describe-secret \
+          --secret-id "ai-agents-openai-api-key-${ENVIRONMENT}" \
+          --query 'ARN' --output text)
+        
+        echo "Using secret ARN: $SECRET_ARN"
+        
+        # Get queue URLs and S3 bucket from CloudFormation stack
+        STACK_NAME="ai-agents-ecs-infrastructure-${ENVIRONMENT}"
+        
+        echo "Getting SQS queue URLs..."
+        ROUTER_JOBS_QUEUE=$(aws sqs get-queue-url --queue-name "task-router-jobs-${ENVIRONMENT}" --query 'QueueUrl' --output text 2>/dev/null || echo "")
+        EVENTS_QUEUE=$(aws sqs get-queue-url --queue-name "task-events-${ENVIRONMENT}" --query 'QueueUrl' --output text 2>/dev/null || echo "")
+        RESEARCH_QUEUE=$(aws sqs get-queue-url --queue-name "research-tasks-${ENVIRONMENT}" --query 'QueueUrl' --output text 2>/dev/null || echo "")
+        PRODUCT_MANAGER_QUEUE=$(aws sqs get-queue-url --queue-name "product-manager-tasks-${ENVIRONMENT}" --query 'QueueUrl' --output text 2>/dev/null || echo "")
+        DRAWER_QUEUE=$(aws sqs get-queue-url --queue-name "drawer-tasks-${ENVIRONMENT}" --query 'QueueUrl' --output text 2>/dev/null || echo "")
+        DESIGNER_QUEUE=$(aws sqs get-queue-url --queue-name "designer-tasks-${ENVIRONMENT}" --query 'QueueUrl' --output text 2>/dev/null || echo "")
+        CODER_QUEUE=$(aws sqs get-queue-url --queue-name "coder-tasks-${ENVIRONMENT}" --query 'QueueUrl' --output text 2>/dev/null || echo "")
+        
+        # Get S3 bucket name from CloudFormation outputs
+        ARTIFACT_BUCKET=$(aws cloudformation describe-stacks \
+          --stack-name "ai-agents-ecs-infrastructure-${ENVIRONMENT}" \
+          --query 'Stacks[0].Outputs[?OutputKey==`TaskArtifactsBucketName`].OutputValue' \
+          --output text)
+        
+        # Validate that queues exist
+        if [ -z "$ROUTER_JOBS_QUEUE" ] || [ -z "$EVENTS_QUEUE" ]; then
+          echo "❌ Required SQS queues not found. Please ensure CloudFormation stack was deployed successfully."
+          exit 1
+        fi
+        
+        echo "Queue URLs:"
+        echo "  Router Jobs: $ROUTER_JOBS_QUEUE"
+        echo "  Events: $EVENTS_QUEUE"
+        echo "  Research: $RESEARCH_QUEUE"
+        echo "  Product Manager: $PRODUCT_MANAGER_QUEUE"
+        echo "  Drawer: $DRAWER_QUEUE"
+        echo "  Designer: $DESIGNER_QUEUE"
+        echo "  Coder: $CODER_QUEUE"
+        echo "  Artifact Bucket: $ARTIFACT_BUCKET"
+        
+        # Function to generate task definition
+        generate_task_definition() {
+          local service_name=$1
+          local container_port=$2
+          local additional_env_vars=$3
+          
+          cat > ecs-task-definitions/${service_name}.json << EOF
+        {
+          "family": "ai-agents-${service_name}-${ENVIRONMENT}",
+          "networkMode": "awsvpc",
+          "requiresCompatibilities": ["FARGATE"],
+          "cpu": "256",
+          "memory": "512",
+          "executionRoleArn": "${TASK_EXECUTION_ROLE}",
+          "taskRoleArn": "${TASK_ROLE}",
+          "containerDefinitions": [
+            {
+              "name": "${service_name}",
+              "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ai-agents-${service_name}:${IMAGE_TAG}",
+              "portMappings": [
+                {
+                  "containerPort": ${container_port},
+                  "protocol": "tcp"
+                }
+              ],
+              "environment": [
+                {"name": "NODE_ENV", "value": "${ENVIRONMENT}"},
+                {"name": "AWS_REGION", "value": "${{ env.AWS_REGION }}"},
+                {"name": "ARTIFACT_BUCKET", "value": "${ARTIFACT_BUCKET}"},
+                {"name": "LOG_LEVEL", "value": "info"}
+                ${additional_env_vars}
+              ],
+              "secrets": [
+                {
+                  "name": "OPENAI_API_KEY",
+                  "valueFrom": "${SECRET_ARN}:openai_api_key::"
+                },
+                {
+                  "name": "OPENAI_API_KEY_2",
+                  "valueFrom": "${SECRET_ARN}:openai_api_key_2::"
+                },
+                {
+                  "name": "OPENAI_API_KEY_3",
+                  "valueFrom": "${SECRET_ARN}:openai_api_key_3::"
+                },
+                {
+                  "name": "OPENAI_API_KEY_4",
+                  "valueFrom": "${SECRET_ARN}:openai_api_key_4::"
+                },
+                {
+                  "name": "OPENAI_API_KEY_5",
+                  "valueFrom": "${SECRET_ARN}:openai_api_key_5::"
+                }
+              ],
+              "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                  "awslogs-group": "/ecs/ai-agents-${service_name}",
+                  "awslogs-region": "${{ env.AWS_REGION }}",
+                  "awslogs-stream-prefix": "ecs"
+                }
+              },
+              "essential": true
+            }
+          ]
+        }
+        EOF
+        }
+        
+        # Generate task definition for task-router
+        generate_task_definition "task-router" 3000 '
+                ,{"name": "PORT", "value": "3000"}
+                ,{"name": "ROUTER_JOBS_QUEUE_URL", "value": "'${ROUTER_JOBS_QUEUE}'"}
+                ,{"name": "EVENTS_QUEUE_URL", "value": "'${EVENTS_QUEUE}'"}
+                ,{"name": "RESEARCH_QUEUE_URL", "value": "'${RESEARCH_QUEUE}'"}
+                ,{"name": "PRODUCT_MANAGER_QUEUE_URL", "value": "'${PRODUCT_MANAGER_QUEUE}'"}
+                ,{"name": "DRAWER_QUEUE_URL", "value": "'${DRAWER_QUEUE}'"}
+                ,{"name": "DESIGNER_QUEUE_URL", "value": "'${DESIGNER_QUEUE}'"}
+                ,{"name": "CODER_QUEUE_URL", "value": "'${CODER_QUEUE}'"}
+                ,{"name": "TASK_ROUTER_API_URL", "value": "http://'${ALB_DNS}'"}
+        '
+        
+        # Generate task definition for agent-web
+        generate_task_definition "agent-web" 3000 '
+                ,{"name": "TASK_ROUTER_API_URL", "value": "http://'${ALB_DNS}'"}
+                ,{"name": "NEXT_TELEMETRY_DISABLED", "value": "1"}
+                ,{"name": "S3_BUCKET_NAME", "value": "'${ARTIFACT_BUCKET}'"}
+                ,{"name": "ARTIFACT_BUCKET", "value": "'${ARTIFACT_BUCKET}'"}
+                ,{"name": "SQS_QUEUE_URL", "value": "'${ROUTER_JOBS_QUEUE}'"}
+        '
+        
+        # Generate task definitions for agents
+        for agent in researcher product_manager drawer designer coder; do
+          case $agent in
+            researcher)
+              queue_var="RESEARCH_QUEUE_URL"
+              queue_url="$RESEARCH_QUEUE"
+              ;;
+            product_manager)
+              # Product manager needs BOTH research and product_manager queues
+              queue_var="PRODUCT_MANAGER_QUEUE_URL"
+              queue_url="$PRODUCT_MANAGER_QUEUE"
+              extra_env_vars=',{"name": "RESEARCH_QUEUE_URL", "value": "'${RESEARCH_QUEUE}'"}'
+              ;;
+            drawer)
+              queue_var="DRAWER_QUEUE_URL"
+              queue_url="$DRAWER_QUEUE"
+              ;;
+            designer)
+              queue_var="DESIGNER_QUEUE_URL"
+              queue_url="$DESIGNER_QUEUE"
+              ;;
+            coder)
+              queue_var="CODER_QUEUE_URL"
+              queue_url="$CODER_QUEUE"
+              ;;
+          esac
+          
+          if [ "$agent" = "product_manager" ]; then
+            generate_task_definition "$agent" 80 '
+                ,{"name": "'${queue_var}'", "value": "'${queue_url}'"}
+                ,{"name": "RESEARCH_QUEUE_URL", "value": "'${RESEARCH_QUEUE}'"}
+                ,{"name": "EVENTS_QUEUE_URL", "value": "'${EVENTS_QUEUE}'"}
+                ,{"name": "POLLING_INTERVAL", "value": "5000"}
+            '
+          else
+            generate_task_definition "$agent" 80 '
+                ,{"name": "'${queue_var}'", "value": "'${queue_url}'"}
+                ,{"name": "EVENTS_QUEUE_URL", "value": "'${EVENTS_QUEUE}'"}
+                ,{"name": "POLLING_INTERVAL", "value": "5000"}
+            '
+          fi
+        done
+
+    - name: Deploy ECS Services
+      env:
+        ENVIRONMENT: ${{ steps.env.outputs.environment }}
+        ECS_CLUSTER: ${{ steps.infra.outputs.ecs_cluster }}
+        PRIVATE_SUBNETS: ${{ steps.infra.outputs.private_subnets }}
+        ECS_SECURITY_GROUP: ${{ steps.infra.outputs.ecs_security_group }}
+        TARGET_GROUP_ARN: ${{ steps.infra.outputs.target_group_arn }}
+      run: |
+        echo "🚀 Starting ECS Service Deployment"
+        echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        echo "Environment: $ENVIRONMENT"
+        echo "ECS Cluster: $ECS_CLUSTER"
+        echo "Private Subnets: $PRIVATE_SUBNETS"
+        echo "Security Group: $ECS_SECURITY_GROUP"
+        echo ""
+        
+        # Verify cluster is accessible before deploying services
+        echo "🔍 Pre-deployment cluster verification..."
+        CLUSTER_STATUS=$(aws ecs describe-clusters \
+          --clusters "$ECS_CLUSTER" \
+          --query 'clusters[0].status' \
+          --output text 2>/dev/null || echo "NOT_FOUND")
+        
+        echo "Cluster Status: $CLUSTER_STATUS"
+        
+        if [[ "$CLUSTER_STATUS" != "ACTIVE" ]]; then
+          echo "❌ Cluster is not ACTIVE! Cannot deploy services."
+          echo "🔍 Cluster details:"
+          aws ecs describe-clusters --clusters "$ECS_CLUSTER" --output table || echo "Cannot describe cluster"
+          exit 1
+        fi
+        
+        echo "✅ Cluster is ACTIVE, proceeding with service deployment..."
+        echo ""
+        
+        # Deploy each service
+        for service in task-router researcher product_manager drawer designer coder agent-web; do
+          echo "=========================================="
+          echo "🚀 Deploying service: $service"
+          echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "=========================================="
+          
+          # Check if task definition exists
+          if [[ ! -f "ecs-task-definitions/${service}.json" ]]; then
+            echo "❌ Task definition file not found: ecs-task-definitions/${service}.json"
+            echo "📁 Available task definition files:"
+            ls -la ecs-task-definitions/ || echo "No task definition directory found"
+            exit 1
+          fi
+          
+          echo "✅ Found task definition file for $service"
+          echo "📋 Task definition summary:"
+          cat "ecs-task-definitions/${service}.json" | jq '.family, .cpu, .memory, .containerDefinitions[0].image' || echo "Cannot parse task definition"
+          echo ""
+          
+          # Register task definition
+          echo "📝 Registering task definition for $service..."
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://ecs-task-definitions/${service}.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text 2>&1) || {
+            echo "❌ Failed to register task definition for $service"
+            echo "Error output: $TASK_DEF_ARN"
+            echo "📋 Task definition content:"
+            cat "ecs-task-definitions/${service}.json" | jq . || cat "ecs-task-definitions/${service}.json"
+            exit 1
+          }
+          
+          echo "✅ Registered task definition: $TASK_DEF_ARN"
+          
+          # Create or update service
+          SERVICE_NAME="ai-agents-${service}-${ENVIRONMENT}"
+          echo "🔍 Checking existing service: $SERVICE_NAME"
+          
+          # Check if service exists with enhanced error handling
+          SERVICE_DESCRIBE_OUTPUT=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $SERVICE_NAME \
+            --output json 2>&1) || SERVICE_DESCRIBE_FAILED=true
+          
+          if [[ "$SERVICE_DESCRIBE_FAILED" == "true" ]]; then
+            echo "⚠️  Failed to describe service (may not exist yet)"
+            echo "Error: $SERVICE_DESCRIBE_OUTPUT"
+            SERVICE_STATUS="NONE"
+          else
+            SERVICE_STATUS=$(echo "$SERVICE_DESCRIBE_OUTPUT" | jq -r '.services[0].status // "NONE"')
+            
+            echo "📊 Current service details:"
+            echo "$SERVICE_DESCRIBE_OUTPUT" | jq '.services[0] | {
+              serviceName: .serviceName,
+              status: .status,
+              runningCount: .runningCount,
+              pendingCount: .pendingCount,
+              desiredCount: .desiredCount,
+              taskDefinition: .taskDefinition,
+              createdAt: .createdAt,
+              updatedAt: .updatedAt
+            }' || echo "Cannot parse service details"
+          fi
+          
+          echo "Service $SERVICE_NAME status: $SERVICE_STATUS"
+          
+          if [ "$SERVICE_STATUS" = "ACTIVE" ]; then
+            echo "🔄 Updating existing ACTIVE service: $SERVICE_NAME"
+            
+            # Special handling for task-router port change
+            if [ "$service" = "task-router" ]; then
+              echo "🔍 Checking for task-router port configuration..."
+              
+              # Get current task definition
+              CURRENT_TASK_DEF=$(echo "$SERVICE_DESCRIBE_OUTPUT" | jq -r '.services[0].taskDefinition')
+              echo "Current task definition: $CURRENT_TASK_DEF"
+              
+              # Check if current service uses port 3001 (old config)
+              CURRENT_PORT=$(aws ecs describe-task-definition \
+                --task-definition "$CURRENT_TASK_DEF" \
+                --query 'taskDefinition.containerDefinitions[0].portMappings[0].containerPort' \
+                --output text 2>/dev/null || echo "unknown")
+              
+              echo "Current port: $CURRENT_PORT, New port: 3000"
+              
+              if [ "$CURRENT_PORT" = "3001" ]; then
+                echo "⚠️ Port mismatch detected! Current: 3001, New: 3000"
+                echo "🗑️  Deleting and recreating task-router service due to port change..."
+                
+                # Scale down first
+                echo "📉 Scaling service to 0..."
+                aws ecs update-service \
+                  --cluster $ECS_CLUSTER \
+                  --service $SERVICE_NAME \
+                  --desired-count 0
+                
+                echo "⏳ Waiting 30 seconds for service to scale down..."
+                sleep 30
+                
+                # Delete the service
+                echo "🗑️  Deleting service..."
+                aws ecs delete-service \
+                  --cluster $ECS_CLUSTER \
+                  --service $SERVICE_NAME
+                
+                echo "⏳ Waiting 60 seconds for service deletion..."
+                sleep 60
+                
+                # Set status to NONE so it gets recreated below
+                SERVICE_STATUS="NONE"
+                echo "✅ Service deletion completed, will recreate with new configuration"
+              fi
+            fi
+            
+            if [ "$SERVICE_STATUS" = "ACTIVE" ]; then
+              # Normal update for services without port changes
+              echo "🔄 Performing normal service update..."
+              UPDATE_OUTPUT=$(aws ecs update-service \
+                --cluster $ECS_CLUSTER \
+                --service $SERVICE_NAME \
+                --task-definition $TASK_DEF_ARN \
+                --desired-count 1 \
+                --output json 2>&1) || {
+                echo "❌ Service update failed"
+                echo "Error: $UPDATE_OUTPUT"
+                exit 1
+              }
+              
+              echo "✅ Service update initiated"
+              echo "$UPDATE_OUTPUT" | jq '.service | {serviceName, status, runningCount, pendingCount, taskDefinition}' || echo "Cannot parse update output"
+            fi
+          fi
+          
+          if [ "$SERVICE_STATUS" != "ACTIVE" ]; then
+            if [ "$SERVICE_STATUS" != "NONE" ]; then
+              echo "⚠️  Service $SERVICE_NAME exists but is not ACTIVE (status: $SERVICE_STATUS). Will create new service."
+              
+              # If service is DRAINING, wait for it to be deleted
+              if [ "$SERVICE_STATUS" = "DRAINING" ]; then
+                echo "⏳ Waiting for DRAINING service to be fully deleted..."
+                # Wait up to 5 minutes for service to be deleted
+                timeout 300 bash -c "
+                  while true; do
+                    STATUS=\$(aws ecs describe-services --cluster $ECS_CLUSTER --services $SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo 'NONE')
+                    echo \"Current status: \$STATUS\"
+                    if [ \"\$STATUS\" = \"NONE\" ]; then
+                      echo 'Service fully deleted'
+                      break
+                    fi
+                    echo 'Still draining... waiting 10 seconds'
+                    sleep 10
+                  done
+                " || echo "Timeout waiting for service deletion, proceeding anyway"
+              fi
+            else
+              echo "📝 Service $SERVICE_NAME does not exist. Creating new service."
+            fi
+            
+            echo "🏗️  Creating new service configuration..."
+            
+            # Convert comma-separated subnets to JSON array
+            SUBNETS_JSON=$(echo $PRIVATE_SUBNETS | tr ',' '\n' | jq -R . | jq -s .)
+            echo "Subnets JSON: $SUBNETS_JSON"
+            
+            # Create base service configuration
+            echo "📋 Generating base service configuration..."
+            SERVICE_CONFIG=$(jq -n \
+              --arg serviceName "$SERVICE_NAME" \
+              --arg cluster "$ECS_CLUSTER" \
+              --arg taskDefinition "$TASK_DEF_ARN" \
+              --argjson subnets "$SUBNETS_JSON" \
+              --arg securityGroup "$ECS_SECURITY_GROUP" \
+              '{
+                serviceName: $serviceName,
+                cluster: $cluster,
+                taskDefinition: $taskDefinition,
+                desiredCount: 1,
+                networkConfiguration: {
+                  awsvpcConfiguration: {
+                    subnets: $subnets,
+                    securityGroups: [$securityGroup],
+                    assignPublicIp: "DISABLED"
+                  }
+                },
+                capacityProviderStrategy: [
+                  {
+                    capacityProvider: "FARGATE_SPOT",
+                    weight: 4
+                  },
+                  {
+                    capacityProvider: "FARGATE",
+                    weight: 1
+                  }
+                ]
+              }')
+            
+            # Add load balancer configuration for task-router
+            if [ "$service" = "task-router" ]; then
+              echo "🔗 Adding load balancer configuration for task-router..."
+              TARGET_GROUP_ARN=$(aws cloudformation describe-stacks \
+                --stack-name "ai-agents-ecs-infrastructure-${ENVIRONMENT}" \
+                --query 'Stacks[0].Outputs[?OutputKey==`APITargetGroupArn`].OutputValue' \
+                --output text)
+              
+              echo "Target Group ARN: $TARGET_GROUP_ARN"
+              
+              if [[ -z "$TARGET_GROUP_ARN" || "$TARGET_GROUP_ARN" == "None" ]]; then
+                echo "❌ API Target Group ARN not found in CloudFormation outputs"
+                echo "🔍 Available outputs:"
+                aws cloudformation describe-stacks \
+                  --stack-name "ai-agents-ecs-infrastructure-${ENVIRONMENT}" \
+                  --query 'Stacks[0].Outputs[*].{Key:OutputKey,Value:OutputValue}' \
+                  --output table
+                exit 1
+              fi
+              
+              SERVICE_CONFIG=$(echo "$SERVICE_CONFIG" | jq \
+                --arg targetGroupArn "$TARGET_GROUP_ARN" \
+                '. + {
+                  loadBalancers: [
+                    {
+                      targetGroupArn: $targetGroupArn,
+                      containerName: "task-router",
+                      containerPort: 3000
+                    }
+                  ]
+                }')
+              
+              echo "✅ Added load balancer configuration"
+            elif [ "$service" = "agent-web" ]; then
+              echo "🔗 Adding load balancer configuration for agent-web..."
+              WEB_TARGET_GROUP_ARN=$(aws cloudformation describe-stacks \
+                --stack-name "ai-agents-ecs-infrastructure-${ENVIRONMENT}" \
+                --query 'Stacks[0].Outputs[?OutputKey==`WebTargetGroupArn`].OutputValue' \
+                --output text)
+              
+              echo "Web Target Group ARN: $WEB_TARGET_GROUP_ARN"
+              
+              if [[ -z "$WEB_TARGET_GROUP_ARN" || "$WEB_TARGET_GROUP_ARN" == "None" ]]; then
+                echo "❌ Web Target Group ARN not found in CloudFormation outputs"
+                echo "🔍 Available outputs:"
+                aws cloudformation describe-stacks \
+                  --stack-name "ai-agents-ecs-infrastructure-${ENVIRONMENT}" \
+                  --query 'Stacks[0].Outputs[*].{Key:OutputKey,Value:OutputValue}' \
+                  --output table
+                exit 1
+              fi
+              
+              SERVICE_CONFIG=$(echo "$SERVICE_CONFIG" | jq \
+                --arg targetGroupArn "$WEB_TARGET_GROUP_ARN" \
+                '. + {
+                  loadBalancers: [
+                    {
+                      targetGroupArn: $targetGroupArn,
+                      containerName: "agent-web",
+                      containerPort: 3000
+                    }
+                  ]
+                }')
+              
+              echo "✅ Added web load balancer configuration"
+            fi
+            
+            # Create the service
+            echo "🚀 Creating service with configuration:"
+            echo "$SERVICE_CONFIG" | jq .
+            
+            # Write config to temporary file and create service
+            echo "$SERVICE_CONFIG" > /tmp/service-config-${service}.json
+            
+            # Validate JSON before creating service
+            echo "🔍 Validating service configuration JSON..."
+            if ! cat /tmp/service-config-${service}.json | jq . > /dev/null; then
+              echo "❌ Invalid JSON in service configuration"
+              echo "📋 Raw configuration:"
+              cat /tmp/service-config-${service}.json
+              exit 1
+            fi
+            
+            echo "✅ JSON validation passed"
+            echo "📋 Final service configuration:"
+            cat /tmp/service-config-${service}.json | jq .
+            
+            echo "🚀 Creating ECS service..."
+            CREATE_OUTPUT=$(aws ecs create-service \
+              --cli-input-json file:///tmp/service-config-${service}.json \
+              --output json 2>&1) || {
+              echo "❌ Service creation failed for $service"
+              echo "Error output: $CREATE_OUTPUT"
+              echo ""
+              echo "🔍 Debugging information:"
+              echo "Cluster: $ECS_CLUSTER"
+              echo "Service Name: $SERVICE_NAME"
+              echo "Task Definition: $TASK_DEF_ARN"
+              echo "Subnets: $PRIVATE_SUBNETS"
+              echo "Security Group: $ECS_SECURITY_GROUP"
+              echo ""
+              echo "📋 Service configuration that failed:"
+              cat /tmp/service-config-${service}.json | jq . || cat /tmp/service-config-${service}.json
+              exit 1
+            }
+            
+            echo "✅ Service created successfully"
+            echo "$CREATE_OUTPUT" | jq '.service | {serviceName, status, runningCount, pendingCount, taskDefinition, createdAt}' || echo "Cannot parse create output"
+          fi
+          
+          echo "✅ Completed deployment for $service"
+          echo ""
+        done
+        
+        echo "🎉 All services deployment completed!"
+        echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+    - name: Wait for services to be stable
+      run: |
+        ENV_NAME=${{ steps.env.outputs.environment }}
+        ECS_CLUSTER=${{ steps.infra.outputs.ecs_cluster }}
+        
+        echo "Waiting for services to stabilize..."
+        
+        # Check service status first
+        echo "=== Current Service Status ==="
+        
+        # Build service list for the environment
+        SERVICE_LIST=""
+        for svc in task-router researcher product_manager drawer designer coder agent-web; do
+          SERVICE_NAME="ai-agents-${svc}-${ENV_NAME}"
+          if [ -z "$SERVICE_LIST" ]; then
+            SERVICE_LIST="$SERVICE_NAME"
+          else
+            SERVICE_LIST="$SERVICE_LIST $SERVICE_NAME"
+          fi
+        done
+        
+        echo "Checking services: $SERVICE_LIST"
+        
+        if [ -n "$SERVICE_LIST" ]; then
+          aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $SERVICE_LIST \
+            --query 'services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount,TaskDef:taskDefinition}' \
+            --output table 2>/dev/null || echo "Some services may not exist yet"
+        fi
+        
+        # Check for services with 0 running tasks and debug them immediately
+        echo "=== Debugging services with 0 running tasks ==="
+        for svc in task-router researcher product_manager drawer designer coder agent-web; do
+          SERVICE_NAME="ai-agents-${svc}-${ENV_NAME}"
+          
+          # Get running count
+          RUNNING_COUNT=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $SERVICE_NAME \
+            --query 'services[0].runningCount' \
+            --output text 2>/dev/null || echo "0")
+          
+          if [ "$RUNNING_COUNT" = "0" ]; then
+            echo "🔍 Debugging $SERVICE_NAME (0 running tasks)..."
+            
+            # Get all tasks (including stopped ones)
+            echo "--- Recent Tasks ---"
+            aws ecs list-tasks \
+              --cluster $ECS_CLUSTER \
+              --service-name $SERVICE_NAME \
+              --desired-status STOPPED \
+              --max-items 3 \
+              --query 'taskArns[*]' \
+              --output text | tr '\t' '\n' | while read TASK_ARN; do
+              
+              if [ -n "$TASK_ARN" ] && [ "$TASK_ARN" != "None" ]; then
+                echo "Task: $TASK_ARN"
+                aws ecs describe-tasks \
+                  --cluster $ECS_CLUSTER \
+                  --tasks $TASK_ARN \
+                  --query 'tasks[0].{LastStatus:lastStatus,DesiredStatus:desiredStatus,StoppedReason:stoppedReason,StoppedAt:stoppedAt,HealthStatus:healthStatus}' \
+                  --output table
+                
+                # Get container details
+                aws ecs describe-tasks \
+                  --cluster $ECS_CLUSTER \
+                  --tasks $TASK_ARN \
+                  --query 'tasks[0].containers[0].{Name:name,LastStatus:lastStatus,ExitCode:exitCode,Reason:reason}' \
+                  --output table
+              fi
+            done
+            
+            # Get current running/pending tasks
+            echo "--- Current Tasks ---"
+            CURRENT_TASKS=$(aws ecs list-tasks \
+              --cluster $ECS_CLUSTER \
+              --service-name $SERVICE_NAME \
+              --query 'taskArns[*]' \
+              --output text)
+            
+            if [ -n "$CURRENT_TASKS" ]; then
+              aws ecs describe-tasks \
+                --cluster $ECS_CLUSTER \
+                --tasks $CURRENT_TASKS \
+                --query 'tasks[*].{TaskArn:taskArn,LastStatus:lastStatus,HealthStatus:healthStatus,CreatedAt:createdAt}' \
+                --output table
+            fi
+            
+            # Check recent CloudWatch logs
+            echo "--- Recent Logs for $svc ---"
+            LOG_GROUP="/ecs/ai-agents-${svc}"
+            aws logs filter-log-events \
+              --log-group-name "$LOG_GROUP" \
+              --start-time $(date -d '10 minutes ago' +%s)000 \
+              --max-items 10 \
+              --query 'events[*].{Time:timestamp,Message:message}' \
+              --output table 2>/dev/null || echo "No recent logs found"
+          fi
+        done
+
+    - name: Check CloudWatch Logs for Errors
+      if: always()
+      run: |
+        ENV_NAME=${{ steps.env.outputs.environment }}
+        ECS_CLUSTER=${{ steps.infra.outputs.ecs_cluster }}
+        
+        echo "=== Checking CloudWatch Logs for Errors ==="
+        
+        # Check logs for each service
+        for service in task-router researcher product_manager drawer designer coder agent-web; do
+          LOG_GROUP="/ecs/ai-agents-${service}"
+          echo "Checking logs for $service in $LOG_GROUP..."
+          
+          # Get recent log events (last 15 minutes)
+          aws logs filter-log-events \
+            --log-group-name "$LOG_GROUP" \
+            --start-time $(date -d '15 minutes ago' +%s)000 \
+            --query 'events[*].{Time:eventId,Message:message}' \
+            --output table \
+            --max-items 20 || echo "No logs found for $service"
+        done
+
+    - name: Get deployment status
+      run: |
+        ENV_NAME=${{ steps.env.outputs.environment }}
+        ECS_CLUSTER=${{ steps.infra.outputs.ecs_cluster }}
+        
+        # Build service list for the environment
+        SERVICE_LIST=""
+        for svc in task-router researcher product_manager drawer designer coder agent-web; do
+          SERVICE_NAME="ai-agents-${svc}-${ENV_NAME}"
+          if [ -z "$SERVICE_LIST" ]; then
+            SERVICE_LIST="$SERVICE_NAME"
+          else
+            SERVICE_LIST="$SERVICE_LIST $SERVICE_NAME"
+          fi
+        done
+        
+        echo "=== ECS Services Status ==="
+        if [ -n "$SERVICE_LIST" ]; then
+          aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $SERVICE_LIST \
+            --query 'services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}' \
+            --output table 2>/dev/null || echo "Some services may not exist"
+        else
+          echo "No services found"
+        fi
+        
+        echo "=== ECS Tasks Status ==="
+        aws ecs list-tasks \
+          --cluster $ECS_CLUSTER \
+          --query 'taskArns[*]' \
+          --output table
+
+  notify:
+    name: Notify Deployment Status
+    needs: [deploy-with-docker-compose]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Determine environment
+      id: env
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+        elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          echo "environment=production" >> $GITHUB_OUTPUT
+        else
+          echo "environment=staging" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Get Load Balancer URL
+      id: alb
+      run: |
+        ENV_NAME=${{ steps.env.outputs.environment }}
+        STACK_NAME="ai-agents-ecs-infrastructure-${ENV_NAME}"
+        
+        ALB_DNS=$(aws cloudformation describe-stacks \
+          --stack-name $STACK_NAME \
+          --query 'Stacks[0].Outputs[?OutputKey==`LoadBalancerDNS`].OutputValue' \
+          --output text)
+        
+        echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
+
+    - name: Deployment Success
+      if: ${{ needs.deploy-with-docker-compose.result == 'success' }}
+      run: |
+        echo "✅ ECS Deployment to ${{ steps.env.outputs.environment }} successful!"
+        echo "🌐 Access your application at: http://${{ steps.alb.outputs.alb_dns }}"
+        echo "📊 Monitor your services in AWS ECS Console"
+
+    - name: Deployment Failure
+      if: ${{ needs.deploy-with-docker-compose.result == 'failure' }}
+      run: |
+        echo "❌ ECS Deployment to ${{ steps.env.outputs.environment }} failed!"
+        echo "Check the workflow logs and AWS ECS console for details"
+        exit 1 

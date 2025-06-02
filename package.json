@@ -1,0 +1,55 @@
+{
+  "name": "ai-agents-workspace",
+  "version": "1.0.0",
+  "description": "AI Agents Workspaces",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "agents/common",
+    "agents/researcher",
+    "agents/product_manager",
+    "agents/drawer",
+    "agents/designer",
+    "agents/coder"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "build:common": "npm run build --workspace=agents/common",
+    "build:researcher": "npm run build --workspace=agents/researcher",
+    "build:product_manager": "npm run build --workspace=agents/product_manager",
+    "build:drawer": "npm run build --workspace=agents/drawer",
+    "build:designer": "npm run build --workspace=agents/designer",
+    "build:coder": "npm run build --workspace=agents/coder",
+    "clean": "npm run clean --workspaces",
+    "install:all": "npm install",
+    "dev:researcher": "npm run dev --workspace=agents/researcher",
+    "dev:product_manager": "npm run dev --workspace=agents/product_manager",
+    "dev:drawer": "npm run dev --workspace=agents/drawer",
+    "dev:designer": "npm run dev --workspace=agents/designer",
+    "dev:coder": "npm run dev --workspace=agents/coder",
+    "start:researcher": "npm run start --workspace=agents/researcher",
+    "start:product_manager": "npm run start --workspace=agents/product_manager",
+    "start:drawer": "npm run start --workspace=agents/drawer",
+    "start:designer": "npm run start --workspace=agents/designer",
+    "start:coder": "npm run start --workspace=agents/coder"
+  },
+  "devDependencies": {
+    "@types/babel__standalone": "^7.1.9",
+    "@types/node": "^20.8.0",
+    "typescript": "^5.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "research",
+    "writing",
+    "coding",
+    "automation"
+  ],
+  "author": "AI Agents Team",
+  "license": "MIT"
+}

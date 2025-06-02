@@ -1,0 +1,361 @@
+version: '3.8'
+
+services:
+  # LocalStack - Mock AWS services (SQS, S3)
+  localstack:
+    image: localstack/localstack:3.0
+    container_name: localstack
+    ports:
+      - "4566:4566"  # LocalStack edge port
+      - "4510-4559:4510-4559"  # External services port range
+    environment:
+      - SERVICES=s3,sqs
+      - DEBUG=1
+      - DATA_DIR=/var/lib/localstack
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./localstack-data:/var/lib/localstack"
+      - "./aws-setup.sh:/etc/localstack/init/ready.d/init-aws.sh"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Task Router Service
+  task-router:
+    build:
+      context: ..
+      dockerfile: task-router/Dockerfile
+    container_name: task-router
+    ports:
+      - "3001:3000"  # API port
+      - "9090:9090"  # Metrics port
+    environment:
+      # Server configuration
+      - PORT=3000
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - METRICS_PORT=9090
+      
+      # AWS configuration (LocalStack)
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_S3_FORCE_PATH_STYLE=true
+      
+      # Queue URLs (LocalStack)
+      - ROUTER_JOBS_QUEUE_URL=http://localstack:4566/000000000000/task-router-jobs
+      - EVENTS_QUEUE_URL=http://localstack:4566/000000000000/task-events
+      - RESEARCH_QUEUE_URL=http://localstack:4566/000000000000/research-tasks
+      - PRODUCT_MANAGER_QUEUE_URL=http://localstack:4566/000000000000/product-manager-tasks
+      - DRAWER_QUEUE_URL=http://localstack:4566/000000000000/drawer-tasks
+      - DESIGNER_QUEUE_URL=http://localstack:4566/000000000000/designer-tasks
+      - CODER_QUEUE_URL=http://localstack:4566/000000000000/coder-tasks
+      
+      # S3 configuration (LocalStack)
+      - ARTIFACT_BUCKET=task-artifacts
+      - S3_ENDPOINT=http://localstack:4566
+    depends_on:
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # Agent Web Interface
+  agent-web:
+    build:
+      context: ../agent-web
+      dockerfile: Dockerfile
+    container_name: agent-web
+    ports:
+      - "3000:3000"
+    environment:
+      # AWS configuration (LocalStack)
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_S3_FORCE_PATH_STYLE=true
+      
+      # SQS configuration (LocalStack)
+      - SQS_QUEUE_URL=http://localstack:4566/000000000000/task-router-jobs
+      
+      # S3 configuration (LocalStack)
+      - S3_BUCKET_NAME=task-artifacts
+      
+      # Task Router API
+      - TASK_ROUTER_API_URL=http://task-router:3000
+      
+      # Next.js configuration
+      - NODE_ENV=development
+      - NEXT_TELEMETRY_DISABLED=1
+    depends_on:
+      task-router:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # Researcher Agent
+  researcher:
+    build:
+      context: ..
+      dockerfile: agents/researcher/Dockerfile
+    container_name: researcher-agent
+    env_file:
+      - .env
+    environment:
+      # OpenAI configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY_2=${OPENAI_API_KEY_2}
+      - OPENAI_API_KEY_3=${OPENAI_API_KEY_3}
+      - OPENAI_API_KEY_4=${OPENAI_API_KEY_4}
+      - OPENAI_API_KEY_5=${OPENAI_API_KEY_5}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      
+      # AWS configuration (LocalStack)
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_S3_FORCE_PATH_STYLE=true
+      
+      # Queue URLs (LocalStack)
+      - RESEARCH_QUEUE_URL=http://localstack:4566/000000000000/research-tasks
+      - EVENTS_QUEUE_URL=http://localstack:4566/000000000000/task-events
+      
+      # S3 configuration (LocalStack)
+      - ARTIFACT_BUCKET=task-artifacts
+      
+      # Logging
+      - LOG_LEVEL=debug
+      - NODE_ENV=development
+    depends_on:
+      localstack:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # Coder Agent
+  coder:
+    build:
+      context: ..
+      dockerfile: agents/coder/Dockerfile
+    container_name: coder-agent
+    ports:
+      - "3100-3110:3100-3110"  # Preview server ports
+    env_file:
+      - .env
+    environment:
+      # OpenAI configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY_2=${OPENAI_API_KEY_2}
+      - OPENAI_API_KEY_3=${OPENAI_API_KEY_3}
+      - OPENAI_API_KEY_4=${OPENAI_API_KEY_4}
+      - OPENAI_API_KEY_5=${OPENAI_API_KEY_5}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      
+      # AWS configuration (LocalStack)
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_S3_FORCE_PATH_STYLE=true
+      
+      # Queue URLs (LocalStack)
+      - CODER_QUEUE_URL=http://localstack:4566/000000000000/coder-tasks
+      - EVENTS_QUEUE_URL=http://localstack:4566/000000000000/task-events
+      
+      # S3 configuration (LocalStack)
+      - ARTIFACT_BUCKET=task-artifacts
+      
+      # Logging
+      - LOG_LEVEL=debug
+      - NODE_ENV=development
+    depends_on:
+      localstack:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # Product Manager Agent
+  product_manager:
+    build:
+      context: ..
+      dockerfile: agents/product_manager/Dockerfile
+    container_name: product-manager-agent
+    env_file:
+      - .env
+    environment:
+      # OpenAI configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY_2=${OPENAI_API_KEY_2}
+      - OPENAI_API_KEY_3=${OPENAI_API_KEY_3}
+      - OPENAI_API_KEY_4=${OPENAI_API_KEY_4}
+      - OPENAI_API_KEY_5=${OPENAI_API_KEY_5}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      
+      # AWS configuration (LocalStack)
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_S3_FORCE_PATH_STYLE=true
+      
+      # Queue URLs (LocalStack)
+      - PRODUCT_MANAGER_QUEUE_URL=http://localstack:4566/000000000000/product-manager-tasks
+      - RESEARCH_QUEUE_URL=http://localstack:4566/000000000000/research-tasks
+      - EVENTS_QUEUE_URL=http://localstack:4566/000000000000/task-events
+      
+      # S3 configuration (LocalStack)
+      - ARTIFACT_BUCKET=task-artifacts
+      
+      # Logging
+      - LOG_LEVEL=debug
+      - NODE_ENV=development
+    depends_on:
+      localstack:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # Designer Agent
+  designer:
+    build:
+      context: ..
+      dockerfile: agents/designer/Dockerfile
+    container_name: designer-agent
+    env_file:
+      - .env
+    environment:
+      # OpenAI configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY_2=${OPENAI_API_KEY_2}
+      - OPENAI_API_KEY_3=${OPENAI_API_KEY_3}
+      - OPENAI_API_KEY_4=${OPENAI_API_KEY_4}
+      - OPENAI_API_KEY_5=${OPENAI_API_KEY_5}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      
+      # AWS configuration (LocalStack)
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_S3_FORCE_PATH_STYLE=true
+      
+      # Queue URLs (LocalStack)
+      - DESIGNER_QUEUE_URL=http://localstack:4566/000000000000/designer-tasks
+      - EVENTS_QUEUE_URL=http://localstack:4566/000000000000/task-events
+      
+      # S3 configuration (LocalStack)
+      - ARTIFACT_BUCKET=task-artifacts
+      
+      # Logging
+      - LOG_LEVEL=debug
+      - NODE_ENV=development
+    depends_on:
+      localstack:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # Drawer Agent
+  drawer:
+    build:
+      context: ..
+      dockerfile: agents/drawer/Dockerfile
+    container_name: drawer-agent
+    env_file:
+      - .env
+    environment:
+      # OpenAI configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY_2=${OPENAI_API_KEY_2}
+      - OPENAI_API_KEY_3=${OPENAI_API_KEY_3}
+      - OPENAI_API_KEY_4=${OPENAI_API_KEY_4}
+      - OPENAI_API_KEY_5=${OPENAI_API_KEY_5}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      
+      # AWS configuration (LocalStack)
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_S3_FORCE_PATH_STYLE=true
+      
+      # Queue URLs (LocalStack)
+      - DRAWER_QUEUE_URL=http://localstack:4566/000000000000/drawer-tasks
+      - EVENTS_QUEUE_URL=http://localstack:4566/000000000000/task-events
+      
+      # S3 configuration (LocalStack)
+      - ARTIFACT_BUCKET=task-artifacts
+      
+      # Logging
+      - LOG_LEVEL=debug
+      - NODE_ENV=development
+    depends_on:
+      localstack:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # Redis (for task router state if needed)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: task-redis
+  #   ports:
+  #     - "6379:6379"
+  #   command: redis-server --appendonly yes
+  #   volumes:
+  #     - redis-data:/data
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 3
+
+volumes:
+  redis-data:
+  localstack-data:
+
+networks:
+  default:
+    name: task-agent-network 
