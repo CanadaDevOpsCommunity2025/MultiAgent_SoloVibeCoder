@@ -1,0 +1,27 @@
+{
+  "name": "@agents/researcher",
+  "version": "1.0.0",
+  "description": "AI Research Agent",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "start:dev": "npm run build && npm start",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "openai": "^4.20.0",
+    "@aws-sdk/client-s3": "^3.450.0",
+    "@aws-sdk/client-sqs": "^3.450.0",
+    "pino": "^8.16.0",
+    "pino-pretty": "^10.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.0",
+    "typescript": "^5.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+} 
